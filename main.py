@@ -19,11 +19,11 @@ def home():
 # ==========================================================
 # ૨. કન્ફિગરેશન (તમારી API કી અને ટેલિગ્રામ વિગતો અહીં ભરો)
 # ==========================================================
-DELTA_API_KEY = 'તમારો_ડેલ્ટા_ટેસ્ટનેટ_API_KEY'
-DELTA_API_SECRET = 'તમારો_ડેલ્ટા_ટેસ્ટનેટ_API_SECRET'
+DELTA_API_KEY = '4onK6mBkqFkuNuKW709cf38NF1F9pN'
+DELTA_API_SECRET = 'w34ITWvEeCnR4YbLI2qDQRyCW9CdBPYQPDi3nhtllyHPVnvcIDMSbMY1etT1'
 
-TELEGRAM_BOT_TOKEN = 'તમારો_ટેલિગ્રામ_BOT_TOKEN'
-TELEGRAM_CHAT_ID = 'તમારો_ટેલિગ્રામ_CHAT_ID'
+TELEGRAM_BOT_TOKEN = '9086651924:AAEvzQq780CF2IcU4Kkzud44m3AMq0l2HI4'
+TELEGRAM_CHAT_ID = '886022031'
 
 USD_TO_INR = 88.0
 PAIRS = [
