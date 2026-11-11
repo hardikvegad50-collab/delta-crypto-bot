@@ -8,7 +8,7 @@ import numpy as np
 from flask import Flask
 
 # ==========================================================
-# ૧. Render માટે Web Server (Port Binding)
+# ૧. Render Web Server (Port Binding)
 # ==========================================================
 app = Flask(__name__)
 
@@ -17,13 +17,13 @@ def home():
     return "✅ Delta Crypto Bot is Running 24/7 on Render!"
 
 # ==========================================================
-# ૨. કન્ફિગરેશન (તમારી API કી અને ટેલિગ્રામ વિગતો અહીં ભરો)
+# ૨. કન્ફિગરેશન (Render Environment Variables માંથી ઓટો-રીડ)
 # ==========================================================
-DELTA_API_KEY = '4onK6mBkqFkuNuKW709cf38NF1F9pN'
-DELTA_API_SECRET = 'w34ITWvEeCnR4YbLI2qDQRyCW9CdBPYQPDi3nhtllyHPVnvcIDMSbMY1etT1'
+DELTA_API_KEY = os.environ.get('DELTA_API_KEY')
+DELTA_API_SECRET = os.environ.get('DELTA_API_SECRET')
 
-TELEGRAM_BOT_TOKEN = '9086651924:AAEvzQq780CF2IcU4Kkzud44m3AMq0l2HI4'
-TELEGRAM_CHAT_ID = '886022031'
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 USD_TO_INR = 88.0
 PAIRS = [
@@ -37,13 +37,17 @@ ORDER_SIZE = 1
 MIN_RANGE_INR = 15000
 TRAILING_GAP = 0.005
 
+# ==========================================================
+# ૩. એક્સચેન્જ કનેક્શન
+# ==========================================================
 data_exchange = ccxt.bitstamp({'enableRateLimit': True})
+
 trade_exchange = ccxt.delta({
     'apiKey': DELTA_API_KEY,
     'secret': DELTA_API_SECRET,
     'enableRateLimit': True,
 })
-trade_exchange.set_sandbox_mode(True)
+trade_exchange.set_sandbox_mode(True)  # ટેસ્ટનેટ મોડ
 
 try:
     trade_exchange.load_markets()
@@ -74,7 +78,7 @@ def get_live_candles(symbol):
         if not bars or len(bars) < LOOKBACK_CANDLES:
             return None
         return pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    except Exception as err:
+    except Exception:
         return None
 
 def get_swing_points(df, lookback=30):
@@ -86,6 +90,9 @@ def get_swing_points(df, lookback=30):
     trend = 'DOWN' if high_idx < low_idx else 'UP'
     return swing_high, swing_low, trend
 
+# ==========================================================
+# ૪. ટ્રેડિંગ અને ઓર્ડર લોજિક (એરર ટ્રેકિંગ સાથે)
+# ==========================================================
 def process_pair(pair):
     global trades
     delta_symbol = pair['delta_sym']
@@ -107,6 +114,7 @@ def process_pair(pair):
     if fibo_range_inr < MIN_RANGE_INR:
         return
 
+    # ટ્રેઇલિંગ સ્ટોપલોસ હેન્ડલિંગ
     if state['in_trade']:
         side = state['direction']
         if side == 'SHORT':
@@ -120,10 +128,10 @@ def process_pair(pair):
             if current_price >= state['stop_loss']:
                 try:
                     trade_exchange.create_order(delta_symbol, 'market', 'buy', ORDER_SIZE)
-                except Exception:
-                    pass
-                state['in_trade'] = False
-                send_telegram(f"🛑 *શોર્ટ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                    state['in_trade'] = False
+                    send_telegram(f"🛑 *શોર્ટ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                except Exception as ex:
+                    send_telegram(f"⚠️ *ડેલ્ટા એક્ઝિટ ઓર્ડર ફેલ!*\n• વિગત: `{ex}`")
 
         elif side == 'LONG':
             if current_price > state['best_price']:
@@ -136,12 +144,13 @@ def process_pair(pair):
             if current_price <= state['stop_loss']:
                 try:
                     trade_exchange.create_order(delta_symbol, 'market', 'sell', ORDER_SIZE)
-                except Exception:
-                    pass
-                state['in_trade'] = False
-                send_telegram(f"🛑 *લોંગ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                    state['in_trade'] = False
+                    send_telegram(f"🛑 *લોંગ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                except Exception as ex:
+                    send_telegram(f"⚠️ *ડેલ્ટા એક્ઝિટ ઓર્ડર ફેલ!*\n• વિગત: `{ex}`")
         return
 
+    # નવી એન્ટ્રી શરતો
     if trend == 'DOWN':
         fibo_0_5 = swing_low + (0.50 * fibo_range)
         fibo_sl = swing_low + (0.630 * fibo_range)
@@ -150,14 +159,15 @@ def process_pair(pair):
         if (current_price >= fibo_0_5 and current_price < fibo_sl) and is_red:
             try:
                 trade_exchange.create_order(delta_symbol, 'market', 'sell', ORDER_SIZE)
-            except Exception:
-                pass
-            state['in_trade'] = True
-            state['direction'] = 'SHORT'
-            state['entry_price'] = current_price
-            state['stop_loss'] = fibo_sl
-            state['best_price'] = current_price
-            send_telegram(f"🔴 *૫-મિનિટ શોર્ટ (SELL) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+                state['in_trade'] = True
+                state['direction'] = 'SHORT'
+                state['entry_price'] = current_price
+                state['stop_loss'] = fibo_sl
+                state['best_price'] = current_price
+                send_telegram(f"🔴 *૫-મિનિટ શોર્ટ (SELL) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+            except Exception as ex:
+                print(f"Delta Order Error: {ex}")
+                send_telegram(f"⚠️ *ડેલ્ટા ઓર્ડર રિજેક્ટ થયો!*\n• કોઈન: `{delta_symbol}`\n• ભૂલ: `{ex}`")
 
     elif trend == 'UP':
         fibo_0_5 = swing_high - (0.50 * fibo_range)
@@ -167,32 +177,31 @@ def process_pair(pair):
         if (current_price <= fibo_0_5 and current_price > fibo_sl) and is_green:
             try:
                 trade_exchange.create_order(delta_symbol, 'market', 'buy', ORDER_SIZE)
-            except Exception:
-                pass
-            state['in_trade'] = True
-            state['direction'] = 'LONG'
-            state['entry_price'] = current_price
-            state['stop_loss'] = fibo_sl
-            state['best_price'] = current_price
-            send_telegram(f"🟢 *૫-મિનિટ લોંગ (BUY) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+                state['in_trade'] = True
+                state['direction'] = 'LONG'
+                state['entry_price'] = current_price
+                state['stop_loss'] = fibo_sl
+                state['best_price'] = current_price
+                send_telegram(f"🟢 *૫-મિનિટ લોંગ (BUY) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+            except Exception as ex:
+                print(f"Delta Order Error: {ex}")
+                send_telegram(f"⚠️ *ડેલ્ટા ઓર્ડર રિજેક્ટ થયો!*\n• કોઈન: `{delta_symbol}`\n• ભૂલ: `{ex}`")
 
 def bot_worker():
-    """બેકગ્રાઉન્ડમાં ૨૪ કલાક સ્કેન કરતી લૂપ"""
-    send_telegram("🚀 *Render ક્લાઉડ પર બોટ સફળતાપૂર્વક શરૂ થયો!*")
+    send_telegram("🚀 *Render ક્લાઉડ પર બોટ લાઈવ થયો!*")
     while True:
         for p in PAIRS:
             try:
                 process_pair(p)
                 time.sleep(1)
-            except Exception as e:
+            except Exception:
                 time.sleep(1)
         time.sleep(10)
 
-# બોટને બેકગ્રાઉન્ડ થ્રેડમાં ચલાવો
 threading.Thread(target=bot_worker, daemon=True).start()
 
 # ==========================================================
-# ૩. સર્વર શરૂ કરવું
+# ૫. મુખ્ય વેબ સર્વર
 # ==========================================================
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
