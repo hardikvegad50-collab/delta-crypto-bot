@@ -17,7 +17,7 @@ def home():
     return "✅ Delta Crypto Bot is Running 24/7 on Render!"
 
 # ==========================================================
-# ૨. કન્ફિગરેશન (Render Environment Variables માંથી ઓટો-રીડ)
+# ૨. કન્ફિગરેશન (Environment Variables)
 # ==========================================================
 DELTA_API_KEY = os.environ.get('DELTA_API_KEY')
 DELTA_API_SECRET = os.environ.get('DELTA_API_SECRET')
@@ -25,7 +25,6 @@ DELTA_API_SECRET = os.environ.get('DELTA_API_SECRET')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-USD_TO_INR = 88.0
 PAIRS = [
     {'delta_sym': 'BTC/USDT', 'data_sym': 'BTC/USD'},
     {'delta_sym': 'ETH/USDT', 'data_sym': 'ETH/USD'}
@@ -34,8 +33,9 @@ PAIRS = [
 TIMEFRAME = '5m'
 LOOKBACK_CANDLES = 30
 ORDER_SIZE = 1
-MIN_RANGE_INR = 15000
-TRAILING_GAP = 0.005
+MIN_RANGE_USD = 170.0  # લઘુત્તમ સ્વિંગ રેન્જ ડૉલરમાં (આશરે ₹૧૫,૦૦૦)
+TRAILING_GAP = 0.005   # 0.5% ટ્રેઇલિંગ સ્ટોપલોસ
+HEARTBEAT_INTERVAL = 3600  # દર ૧ કલાકે રિપોર્ટ (સેકન્ડ)
 
 # ==========================================================
 # ૩. એક્સચેન્જ કનેક્શન
@@ -47,7 +47,7 @@ trade_exchange = ccxt.delta({
     'secret': DELTA_API_SECRET,
     'enableRateLimit': True,
 })
-trade_exchange.set_sandbox_mode(True)  # ટેસ્ટનેટ મોડ
+trade_exchange.set_sandbox_mode(True)  # ડેમો મોડ
 
 try:
     trade_exchange.load_markets()
@@ -90,8 +90,27 @@ def get_swing_points(df, lookback=30):
     trend = 'DOWN' if high_idx < low_idx else 'UP'
     return swing_high, swing_low, trend
 
+def send_heartbeat():
+    """દર ૧ કલાકે ડૉલરમાં સ્ટેટસ રિપોર્ટ મોકલશે"""
+    lines = [
+        "💓 *બોટ સ્ટેટસ રિપોર્ટ (Heartbeat)*",
+        "• સર્વર: `Render Active (24/7)`",
+        "• લાઈવ માર્કેટ સ્ટેટસ:"
+    ]
+    for p in PAIRS:
+        df = get_live_candles(p['data_sym'])
+        delta_sym = p['delta_sym']
+        st = trades[delta_sym]
+        
+        if df is not None and not df.empty:
+            cur_usd = df.iloc[-1]['close']
+            trade_status = f"{st['direction']} ચાલુ" if st['in_trade'] else "નવા સેટઅપની શોધમાં"
+            lines.append(f"  - `{delta_sym}`: `${cur_usd:,.2f}` ({trade_status})")
+    
+    send_telegram("\n".join(lines))
+
 # ==========================================================
-# ૪. ટ્રેડિંગ અને ઓર્ડર લોજિક (એરર ટ્રેકિંગ સાથે)
+# ૪. ટ્રેડિંગ અને ઓર્ડર લોજિક (ડૉલર ફોર્મેટમાં એલર્ટ્સ)
 # ==========================================================
 def process_pair(pair):
     global trades
@@ -105,16 +124,15 @@ def process_pair(pair):
 
     last_candle = df.iloc[-2]
     current_price = df.iloc[-1]['close']
-    current_price_inr = current_price * USD_TO_INR
     
     swing_high, swing_low, trend = get_swing_points(df, lookback=LOOKBACK_CANDLES)
     fibo_range = swing_high - swing_low
-    fibo_range_inr = fibo_range * USD_TO_INR
 
-    if fibo_range_inr < MIN_RANGE_INR:
+    # લઘુત્તમ સ્વિંગ રેન્જ ફિલ્ટર ($170)
+    if fibo_range < MIN_RANGE_USD:
         return
 
-    # ટ્રેઇલિંગ સ્ટોપલોસ હેન્ડલિંગ
+    # A. ટ્રેઇલિંગ સ્ટોપલોસ હેન્ડલિંગ
     if state['in_trade']:
         side = state['direction']
         if side == 'SHORT':
@@ -123,13 +141,13 @@ def process_pair(pair):
                 new_sl = current_price * (1 + TRAILING_GAP)
                 if new_sl < state['stop_loss']:
                     state['stop_loss'] = new_sl
-                    send_telegram(f"📉 *શોર્ટ ટ્રેઇલિંગ SL અપડેટ*\n• કોઈન: `{delta_symbol}`\n• ભાવ: `₹{current_price_inr:,.0f}`\n• નવો SL: `₹{new_sl * USD_TO_INR:,.0f}`")
+                    send_telegram(f"📉 *શોર્ટ ટ્રેઇલિંગ SL અપડેટ*\n• કોઈન: `{delta_symbol}`\n• ભાવ: `${current_price:,.2f}`\n• નવો SL: `${new_sl:,.2f}`")
             
             if current_price >= state['stop_loss']:
                 try:
                     trade_exchange.create_order(delta_symbol, 'market', 'buy', ORDER_SIZE)
                     state['in_trade'] = False
-                    send_telegram(f"🛑 *શોર્ટ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                    send_telegram(f"🛑 *શોર્ટ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `${current_price:,.2f}`")
                 except Exception as ex:
                     send_telegram(f"⚠️ *ડેલ્ટા એક્ઝિટ ઓર્ડર ફેલ!*\n• વિગત: `{ex}`")
 
@@ -139,18 +157,18 @@ def process_pair(pair):
                 new_sl = current_price * (1 - TRAILING_GAP)
                 if new_sl > state['stop_loss']:
                     state['stop_loss'] = new_sl
-                    send_telegram(f"📈 *લોંગ ટ્રેઇલિંગ SL અપડેટ*\n• કોઈન: `{delta_symbol}`\n• ભાવ: `₹{current_price_inr:,.0f}`\n• નવો SL: `₹{new_sl * USD_TO_INR:,.0f}`")
+                    send_telegram(f"📈 *લોંગ ટ્રેઇલિંગ SL અપડેટ*\n• કોઈન: `{delta_symbol}`\n• ભાવ: `${current_price:,.2f}`\n• નવો SL: `${new_sl:,.2f}`")
             
             if current_price <= state['stop_loss']:
                 try:
                     trade_exchange.create_order(delta_symbol, 'market', 'sell', ORDER_SIZE)
                     state['in_trade'] = False
-                    send_telegram(f"🛑 *લોંગ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `₹{current_price_inr:,.0f}`")
+                    send_telegram(f"🛑 *લોંગ સ્ટોપલોસ હિટ (Exit)*\n• કોઈન: `{delta_symbol}`\n• એક્ઝિટ ભાવ: `${current_price:,.2f}`")
                 except Exception as ex:
                     send_telegram(f"⚠️ *ડેલ્ટા એક્ઝિટ ઓર્ડર ફેલ!*\n• વિગત: `{ex}`")
         return
 
-    # નવી એન્ટ્રી શરતો
+    # B. નવી એન્ટ્રી શરતો
     if trend == 'DOWN':
         fibo_0_5 = swing_low + (0.50 * fibo_range)
         fibo_sl = swing_low + (0.630 * fibo_range)
@@ -164,7 +182,7 @@ def process_pair(pair):
                 state['entry_price'] = current_price
                 state['stop_loss'] = fibo_sl
                 state['best_price'] = current_price
-                send_telegram(f"🔴 *૫-મિનિટ શોર્ટ (SELL) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+                send_telegram(f"🔴 *૫-મિનિટ શોર્ટ (SELL) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `${current_price:,.2f}`\n• SL: `${fibo_sl:,.2f}`")
             except Exception as ex:
                 print(f"Delta Order Error: {ex}")
                 send_telegram(f"⚠️ *ડેલ્ટા ઓર્ડર રિજેક્ટ થયો!*\n• કોઈન: `{delta_symbol}`\n• ભૂલ: `{ex}`")
@@ -182,14 +200,23 @@ def process_pair(pair):
                 state['entry_price'] = current_price
                 state['stop_loss'] = fibo_sl
                 state['best_price'] = current_price
-                send_telegram(f"🟢 *૫-મિનિટ લોંગ (BUY) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `₹{current_price_inr:,.0f}`\n• SL: `₹{fibo_sl * USD_TO_INR:,.0f}`")
+                send_telegram(f"🟢 *૫-મિનિટ લોંગ (BUY) ઓર્ડર થયો!*\n• કોઈન: `{delta_symbol}`\n• એન્ટ્રી: `${current_price:,.2f}`\n• SL: `${fibo_sl:,.2f}`")
             except Exception as ex:
                 print(f"Delta Order Error: {ex}")
                 send_telegram(f"⚠️ *ડેલ્ટા ઓર્ડર રિજેક્ટ થયો!*\n• કોઈન: `{delta_symbol}`\n• ભૂલ: `{ex}`")
 
 def bot_worker():
-    send_telegram("🚀 *Render ક્લાઉડ પર બોટ લાઈવ થયો!*")
+    send_telegram("🚀 *Render ક્લાઉડ પર બોટ લાઈવ થયો (ડૉલર ફોર્મેટ)!*")
+    last_heartbeat = time.time()
+    
     while True:
+        if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
+            try:
+                send_heartbeat()
+            except Exception:
+                pass
+            last_heartbeat = time.time()
+            
         for p in PAIRS:
             try:
                 process_pair(p)
