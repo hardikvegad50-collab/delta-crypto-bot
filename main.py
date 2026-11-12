@@ -22,7 +22,7 @@ def home():
 DELTA_API_KEY = os.environ.get('4onK6mBkqFkuNuKW709cf38NF1F9pN')
 DELTA_API_SECRET = os.environ.get('w34ITWvEeCnR4YbLI2qDQRyCW9CdBPYQPDi3nhtllyHPVnvcIDMSbMY1etT1')
 
-TELEGRAM_BOT_TOKEN = os.environ.get('9086651924:AAEvzQq780CF2IcU4Kkzud44m3AMq0l2HI4')
+TELEGRAM_BOT_TOKEN = os.environ.get('9165884670:AAEgM8NOp-eANeO1o9zoMVtv5y3Vzy1pnZM')
 TELEGRAM_CHAT_ID = os.environ.get('886022031')
 
 PAIRS = [
